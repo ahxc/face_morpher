@@ -4,7 +4,7 @@ Based on Python, OpenCV, dlib
 ## Morphing Faces
 
 ```
-python morphing_faces.py filename1 filename2 0.5
+python morphing_face.py filename1 filename2 0.5
 ```
 
 ## Results Preview

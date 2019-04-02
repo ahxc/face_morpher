@@ -7,6 +7,7 @@ import cv2
 import dlib
 import sys
 import os
+import matplotlib.pyplot as plt
 
 from scipy.spatial import Delaunay
 
@@ -45,8 +46,8 @@ shape_predictor = dlib.shape_predictor(DLIB_MODEL_PATH)
 #----------------------------------------------------------------------------
 # 人脸相关域
 
-LEFT_FACE = list(range(17, 22))#list(range(0, 9)) + 
-RIGHT_FACE = list(range(22, 27))#list(range(8, 17)) + 
+LEFT_FACE = list(range(0, 9)) + list(range(17, 22))
+RIGHT_FACE = list(range(8, 17)) + list(range(22, 27))
 JAW_POINTS = list(range(0, 17))
 
 FACE_END = 68
@@ -119,7 +120,7 @@ def affine_transform(input_image, input_triangle, output_triangle, size):
 	return output_image
 
 #----------------------------------------------------------------------------
-# 三角形变形，Alpha 混合
+# 三角变形，Alpha 混合
 
 def morph_triangle(img1, img2, img, tri1, tri2, tri, alpha):
 	# 计算三角形的边界框
@@ -178,7 +179,7 @@ def points_8(image, points):
 	return np.array(points)
 
 #----------------------------------------------------------------------------
-# 融合函数, 本质线性相加：M(x,y)=(1−α)I(x,y)+αJ(x,y)
+# 三角融合函数, 本质线性相加：M(x,y)=(1−α)I(x,y)+αJ(x,y)
 
 def morph_face(bottom_img, mask_img, points1, points2, alpha = 0.5):
 
@@ -212,9 +213,11 @@ def merge_img(bottom_img, mask_img, mask_matrix, mask_points, blur_detail_x=None
 	face_mask = np.zeros(bottom_img.shape, dtype=bottom_img.dtype)
 
 	for group in OVERLAY_POINTS:
-		cv2.fillConvexPoly(face_mask, cv2.convexHull(mask_matrix[group]), (255, 255, 255))
+		cv2.fillConvexPoly(face_mask, cv2.convexHull(mask_matrix[group]), (255, 255, 255))# 填充人脸多边形
 		r = cv2.boundingRect(np.float32([mask_points[:FACE_END]]))
 		center = (r[0] + int(r[2] / 2), r[1] + int(r[3] / 2))
+	# plt.imshow(face_mask)
+	# plt.show()
 
 	if mat_multiple:
 		mat = cv2.getRotationMatrix2D(center, 0, mat_multiple)
@@ -252,7 +255,12 @@ morph_img = morph_face(bottom_img, warped_image, landmarks_bottom, landmarks2_wa
 outfile_path = os.path.join(RESULT_PATH, 'morph_image_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
 cv2.imwrite(outfile_path, morph_img)
 
+# 重新定位融合图
+landmarks3_morph = get_landmarks(morph_img)
+
 # 泊松融合
-merged_img = merge_img(bottom_img, morph_img, landmarks2_warped, landmarks2_warped, blur_detail_x = 10, blur_detail_y = 10, mat_multiple = 1)
+merged_img = merge_img(bottom_img, morph_img, landmarks3_morph, landmarks3_morph, blur_detail_x = 15, blur_detail_y = 10, mat_multiple = 1)
 outfile_path = os.path.join(RESULT_PATH, 'merged_image_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
 cv2.imwrite(outfile_path, merged_img)
+
+#----------------------------------------------------------------------------

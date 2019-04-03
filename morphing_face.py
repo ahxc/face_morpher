@@ -7,9 +7,11 @@ import cv2
 import dlib
 import sys
 import os
-import matplotlib.pyplot as plt
 
 from scipy.spatial import Delaunay
+
+# 用于一些效果可视化
+import matplotlib.pyplot as plt
 
 #----------------------------------------------------------------------------
 # 相关路径设置
@@ -46,13 +48,14 @@ shape_predictor = dlib.shape_predictor(DLIB_MODEL_PATH)
 #----------------------------------------------------------------------------
 # 人脸相关域
 
-LEFT_FACE = list(range(0, 9)) + list(range(17, 22))
-RIGHT_FACE = list(range(8, 17)) + list(range(22, 27))
-JAW_POINTS = list(range(0, 17))
+"""LEFT_FACE = list(range(0, 9)) + list(range(17, 22))
+RIGHT_FACE = list(range(9, 17)) + list(range(22, 27))"""
+JAW_POINTS = list(range(0, 27))
 
 FACE_END = 68
 
-OVERLAY_POINTS = [LEFT_FACE, RIGHT_FACE, JAW_POINTS]
+# cv2.fillConvexPoly画图
+OVERLAY_POINTS = [JAW_POINTS]# LEFT_FACE, RIGHT_FACE,
 
 #----------------------------------------------------------------------------
 # 68个关键点坐标获取函数
@@ -179,6 +182,26 @@ def points_8(image, points):
 	return np.array(points)
 
 #----------------------------------------------------------------------------
+#
+
+def correct_color(img1, img2, landmark):
+	blur_amount = 0.4 * np.linalg.norm(
+		np.mean(landmark[36:42], axis=0)
+		- np.mean(landmark[42:48], axis=0)
+		)
+	blur_amount = int(blur_amount)
+
+	if blur_amount % 2 == 0:
+		blur_amount += 1
+
+	img1_blur = cv2.GaussianBlur(img1, (blur_amount, blur_amount), 0)
+	img2_blur = cv2.GaussianBlur(img2, (blur_amount, blur_amount), 0)
+
+	img2_blur += (128 * (img2_blur <= 1.0)).astype(img2_blur.dtype)
+
+	return img2.astype(np.float64) * img1_blur.astype(np.float64) / img2_blur.astype(np.float64)
+
+#----------------------------------------------------------------------------
 # 三角融合函数, 本质线性相加：M(x,y)=(1−α)I(x,y)+αJ(x,y)
 
 def morph_face(bottom_img, mask_img, points1, points2, alpha = 0.5):
@@ -258,8 +281,21 @@ cv2.imwrite(outfile_path, morph_img)
 # 重新定位融合图
 landmarks3_morph = get_landmarks(morph_img)
 
+# 矫正底图
+# tran_bottom
+
+# 修正融合图颜色与底图一致
+warped_image_revise = correct_color(bottom_img, morph_img, landmarks3_morph)
+outfile_path = os.path.join(RESULT_PATH, 'morph_image_revise_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
+cv2.imwrite(outfile_path, warped_image_revise)
+
+# 重新定位融合修正颜色图
+landmarks4_warped_revise = get_landmarks(morph_img)
+
+
+
 # 泊松融合
-merged_img = merge_img(bottom_img, morph_img, landmarks3_morph, landmarks3_morph, blur_detail_x = 15, blur_detail_y = 10, mat_multiple = 1)
+merged_img = merge_img(bottom_img, warped_image_revise, landmarks_bottom, landmarks_bottom, blur_detail_x = 15, blur_detail_y = 10, mat_multiple = 1)
 outfile_path = os.path.join(RESULT_PATH, 'merged_image_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
 cv2.imwrite(outfile_path, merged_img)
 

@@ -46,15 +46,15 @@ face_detector = dlib.get_frontal_face_detector()
 shape_predictor = dlib.shape_predictor(DLIB_MODEL_PATH)
 
 #----------------------------------------------------------------------------
-# 人脸相关域
+# 人脸相关域(dlib)
 
 """LEFT_FACE = list(range(0, 9)) + list(range(17, 22))
 RIGHT_FACE = list(range(9, 17)) + list(range(22, 27))"""
 JAW_POINTS = list(range(0, 27))
-
+JAW_END = 17
 FACE_END = 68
 
-# cv2.fillConvexPoly画图
+# cv2.fillConvexPoly多边形画图
 OVERLAY_POINTS = [JAW_POINTS]# LEFT_FACE, RIGHT_FACE,
 
 #----------------------------------------------------------------------------
@@ -64,6 +64,15 @@ def get_landmarks(img, face_detector = face_detector, shape_predictor = shape_pr
 	landmarks = face_detector(img, 1)
 
 	return np.matrix([[i.x, i.y] for i in shape_predictor(img, landmarks[0]).parts()])
+
+#----------------------------------------------------------------------------
+# 人脸方框区域坐标获取
+
+def face_area_coodinate(img):
+
+	area = face_detector(img, 1)[0]
+
+	return [area.left(), area.top(), area.right(), area.bottom()]
 
 #----------------------------------------------------------------------------
 # 读图函数
@@ -116,10 +125,10 @@ def get_triangles(points):
 # 仿射变换
 
 def affine_transform(input_image, input_triangle, output_triangle, size):
-	warp_matrix = cv2.getAffineTransform(
-		np.float32(input_triangle), np.float32(output_triangle))
-	output_image = cv2.warpAffine(input_image, warp_matrix, (size[0], size[1]), None,
-		flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+	warp_matrix = cv2.getAffineTransform(np.float32(input_triangle), np.float32(output_triangle))
+	
+	output_image = cv2.warpAffine(input_image, warp_matrix, (size[0], size[1]), None, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+	
 	return output_image
 
 #----------------------------------------------------------------------------
@@ -162,7 +171,7 @@ def morph_triangle(img1, img2, img, tri1, tri2, tri, alpha):
 	img[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]] = \
 	img[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]] * (1 - mask) + img_rect * mask
 #----------------------------------------------------------------------------
-# 加入四个顶点和四条边的中点用于三角融合
+# 加入图片四个顶点和四条边的中点用于三角剖分
 
 def points_8(image, points):
 
@@ -177,12 +186,11 @@ def points_8(image, points):
 	points.append([x // 2, y])
 	points.append([0, y])
 	points.append([0, y // 2])
-	#print(points)
 
 	return np.array(points)
 
 #----------------------------------------------------------------------------
-#
+# 颜色矫正
 
 def correct_color(img1, img2, landmark):
 	blur_amount = 0.4 * np.linalg.norm(
@@ -241,7 +249,6 @@ def merge_img(bottom_img, mask_img, mask_matrix, mask_points, blur_detail_x=None
 		center = (r[0] + int(r[2] / 2), r[1] + int(r[3] / 2))
 	# plt.imshow(face_mask)
 	# plt.show()
-
 	if mat_multiple:
 		mat = cv2.getRotationMatrix2D(center, 0, mat_multiple)
 		face_mask = cv2.warpAffine(face_mask, mat, (face_mask.shape[1], face_mask.shape[0]))
@@ -250,6 +257,129 @@ def merge_img(bottom_img, mask_img, mask_matrix, mask_points, blur_detail_x=None
 		face_mask = cv2.blur(face_mask, (blur_detail_x, blur_detail_y), center)
 
 	return cv2.seamlessClone(np.uint8(mask_img), bottom_img, face_mask, center, cv2.NORMAL_CLONE)
+
+#----------------------------------------------------------------------------
+# 矫正底图
+
+def affine_triangle(src, dst, t_src, t_dst):
+	r1 = cv2.boundingRect(np.float32([t_src]))
+	r2 = cv2.boundingRect(np.float32([t_dst]))
+
+	t1_rect = []
+	t2_rect = []
+	t2_rect_int = []
+
+	for i in range(0, 3):
+		t1_rect.append((t_src[i][0] - r1[0], t_src[i][1] - r1[1]))
+		t2_rect.append((t_dst[i][0] - r2[0], t_dst[i][1] - r2[1]))
+		t2_rect_int.append((t_dst[i][0] - r2[0], t_dst[i][1] - r2[1]))
+
+	mask = np.zeros((r2[3], r2[2], 3), dtype=np.float32)
+	cv2.fillConvexPoly(mask, np.int32(t2_rect_int), (1.0, 1.0, 1.0), 16, 0)
+
+	img1_rect = src[r1[1]:r1[1] + r1[3], r1[0]:r1[0] + r1[2]]
+
+	size = (r2[2], r2[3])
+
+	img2_rect = affine_transform(img1_rect, t1_rect, t2_rect, size)
+	img2_rect = img2_rect * mask
+
+	dst[r2[1]:r2[1] + r2[3], r2[0]:r2[0] + r2[2]] = dst[r2[1]:r2[1] + r2[3], r2[0]:r2[0] + r2[2]] * ((1.0, 1.0, 1.0) - mask)
+	dst[r2[1]:r2[1] + r2[3], r2[0]:r2[0] + r2[2]] = dst[r2[1]:r2[1] + r2[3], r2[0]:r2[0] + r2[2]] + img2_rect
+
+def rect_contains(rect, point):
+	if point[0] < rect[0]:
+		return False
+	elif point[1] < rect[1]:
+		return False
+	elif point[0] > rect[2]:
+		return False
+	elif point[1] > rect[3]:
+		return False
+	return True
+
+def measure_triangle(image, points):
+	rect = (0, 0, image.shape[1], image.shape[0])
+	sub_div = cv2.Subdiv2D(rect)# 画布
+	points = points.tolist()
+
+	for p in points:
+		sub_div.insert((p[0],p[1]))# 插入关键点
+
+	triangle_list = sub_div.getTriangleList()# 德劳力三角剖分
+
+	triangle = []
+	pt = []
+
+	for t in triangle_list:
+		pt.append((t[0], t[1]))
+		pt.append((t[2], t[3]))
+		pt.append((t[4], t[5]))
+
+		pt1 = (t[0], t[1])
+		pt2 = (t[2], t[3])
+		pt3 = (t[4], t[5])
+
+		if rect_contains(rect, pt1) and rect_contains(rect, pt2) and rect_contains(rect, pt3):
+			ind = []
+			for j in range(0, 3):
+				for k in range(0, len(points)):
+					if abs(pt[j][0] - points[k][0]) < 1.0 and abs(pt[j][1] - points[k][1]) < 1.0:
+						ind.append(k)
+			if len(ind) == 3:
+				triangle.append((ind[0], ind[1], ind[2]))
+
+		pt = []
+
+	return triangle
+
+def tran_src(src_img, src_points, dst_points):
+	jaw = JAW_END
+
+	dst_list = points_8(src_img, dst_points)
+	src_list = points_8(src_img, src_points)
+
+	jaw_points = []
+
+	for i in range(0, jaw):
+		jaw_points.append(dst_list[i].tolist())
+		jaw_points.append(src_list[i].tolist())
+
+	warp_jaw = cv2.convexHull(np.array(jaw_points), returnPoints=False)
+	warp_jaw = warp_jaw.tolist()
+	
+	for i in range(0, len(warp_jaw)):
+		warp_jaw[i] = warp_jaw[i][0]
+
+	warp_jaw.sort()
+
+	if len(warp_jaw) <= jaw:
+		dst_list = dst_list[jaw - len(warp_jaw):]
+		src_list = src_list[jaw - len(warp_jaw):]
+		for i in range(0, len(warp_jaw)):
+			dst_list[i] = jaw_points[int(warp_jaw[i])]
+			src_list[i] = jaw_points[int(warp_jaw[i])]
+	else:
+		for i in range(0, jaw):
+			if len(warp_jaw) > jaw and warp_jaw[i] == 2 * i and warp_jaw[i + 1] == 2 * i + 1:
+				warp_jaw.remove(2 * i)
+
+			dst_list[i] = jaw_points[int(warp_jaw[i])]
+
+	dt = measure_triangle(src_img, dst_list)
+
+	res_img = np.zeros(src_img.shape, dtype=src_img.dtype)
+
+	for i in range(0, len(dt)):
+		t_src = []
+		t_dst = []
+
+		for j in range(0, 3):
+			t_src.append(src_list[dt[i][j]])
+			t_dst.append(dst_list[dt[i][j]])
+		affine_triangle(src_img, res_img, t_src, t_dst)
+
+	return res_img
 
 #----------------------------------------------------------------------------
 # 操作开始
@@ -266,37 +396,42 @@ landmarks_mask= get_landmarks(mask_img)
 M = transformation_from_points(landmarks_bottom, landmarks_mask)
 
 # 将对齐关系应用到mask图并保存
-warped_image = warp_im(mask_img, M, bottom_img.shape)
-outfile_path = os.path.join(RESULT_PATH, 'warped_image_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0]))
-cv2.imwrite(outfile_path, warped_image)
+warped_img = warp_im(mask_img, M, bottom_img.shape)
+outfile_path = os.path.join(RESULT_PATH, '1-warped_img_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0]))
+cv2.imwrite(outfile_path, warped_img)
 
 # 重新定位对齐图
-landmarks2_warped = get_landmarks(warped_image)
+landmarks2_warped = get_landmarks(warped_img)
 
 # 三角变形
-morph_img = morph_face(bottom_img, warped_image, landmarks_bottom, landmarks2_warped, float(alpha))
-outfile_path = os.path.join(RESULT_PATH, 'morph_image_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
+morph_img = morph_face(bottom_img, warped_img, landmarks_bottom, landmarks2_warped, float(alpha))
+outfile_path = os.path.join(RESULT_PATH, '2-morph_img_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
 cv2.imwrite(outfile_path, morph_img)
+
+# 裁剪融合图人脸
 
 # 重新定位融合图
 landmarks3_morph = get_landmarks(morph_img)
 
-# 矫正底图
-# tran_bottom
+# 矫正融合图脸型与底图一致
+tran_morph_img = tran_src(morph_img, landmarks3_morph, landmarks_bottom)
+outfile_path = os.path.join(RESULT_PATH, '3-tran_morph_img_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
+cv2.imwrite(outfile_path, tran_morph_img)
 
 # 修正融合图颜色与底图一致
-warped_image_revise = correct_color(bottom_img, morph_img, landmarks3_morph)
-outfile_path = os.path.join(RESULT_PATH, 'morph_image_revise_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
-cv2.imwrite(outfile_path, warped_image_revise)
+morph_image_revise = correct_color(bottom_img, morph_img, landmarks_bottom)
+outfile_path = os.path.join(RESULT_PATH, '4-morph_img_revise_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
+cv2.imwrite(outfile_path, morph_image_revise)
 
-# 重新定位融合修正颜色图
-landmarks4_warped_revise = get_landmarks(morph_img)
+# morph_image_revise不是标准的RGB文件保存后重载
+morph_image_revise_imread = cv2.imread(outfile_path)
 
-
+"""# 重新定位修正颜色后的融合图
+landmarks4_warped_revise = get_landmarks(tran_bottom_img)"""
 
 # 泊松融合
-merged_img = merge_img(bottom_img, warped_image_revise, landmarks_bottom, landmarks_bottom, blur_detail_x = 15, blur_detail_y = 10, mat_multiple = 1)
-outfile_path = os.path.join(RESULT_PATH, 'merged_image_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
+merged_img = merge_img(bottom_img, morph_image_revise_imread, landmarks_bottom, landmarks_bottom, blur_detail_x = 15, blur_detail_y = 10, mat_multiple = 1.01)
+outfile_path = os.path.join(RESULT_PATH, '5-merged_img_{}_{}_{}.jpg'.format(BOTTOM_IMAGE.split('.')[0], MASK_IMAGE.split('.')[0], alpha))
 cv2.imwrite(outfile_path, merged_img)
 
 #----------------------------------------------------------------------------

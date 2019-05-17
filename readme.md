@@ -1,6 +1,3 @@
-# Face Morpher
-Based on Python, OpenCV, dlib
-
 ## Morphing Faces
 
 step1:
